@@ -156,7 +156,7 @@ def main():
         faces
     )
     print("XI NEW VERTICES",xi_cilindro[455])
-
+    print("hasta aquí sin modificaciones")
     export_stl("geometry_new_vertices.stl", new_vertices, faces)
     print("NEW-VERTICE",branch_ids[455],new_vertices[455])
 
