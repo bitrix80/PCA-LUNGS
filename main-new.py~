@@ -1,0 +1,389 @@
+from vtk_io import read_stl
+from vtk_io import write_vtp
+
+from centerline import (
+    read_all_branches,
+    root_branch,
+    children
+)
+
+import numpy as np
+import vtk
+import pyvista as pv 
+
+from cylinder import first_three_cylinders
+
+from mapping import map_mesh_vertices
+from mapping import compute_projection_vectors
+from detect_bifurcation_vertices import detect_bifurcation_vertices
+from vtk_io import write_projection_vectors
+from cylinders_export import cylinder_to_polydata
+from oriented_centerline import build_ordered_indices
+from centerline import read_centerline
+from mapping import map_point_to_cylinder
+from mapping import assign_branch_by_faces
+from mapping import build_face_neighbors
+from mapping import export_face_branch_id
+from exportar_caras_mezcladas import exportar_caras_mezcladas_vtp
+from exportar_mapping_template import export_mapping_template_vtp
+from exportar_original_with_xi import export_original_with_xi
+CENTERLINE = "Huca0506660.vtp"
+STL = "Huca0506660_preprocessed.stl"
+OUTPUT = "mapped_geometry.stl"
+
+
+def main():
+
+    print("Llegint centerline...")
+
+    poly_vtk = read_centerline(CENTERLINE)
+    poly = pv.wrap(poly_vtk)
+
+    ordered_indices, root_bid, parent_map = build_ordered_indices(poly)
+
+    branches = read_all_branches(CENTERLINE, ordered_indices)
+
+    
+    root = root_branch(branches)
+    childs = children(branches, root["id"])
+
+    branches = [root, childs[0], childs[1]]
+
+    print("\n=== BIFURCACIÓN REAL ===")
+    bif = branches[0]["points"][-1]
+    print("bif =", bif)
+    print("Branques utilitzades:", [b["id"] for b in branches])
+    for b in branches:
+        pts = b["points"]
+        print(f"Branch {b['id']}:")
+        print("  start =", pts[0])
+        print("  end   =", pts[-1])
+    
+    print("Construint cilindres...")
+    cylinders = first_three_cylinders(branches)
+    cylinders_by_id = {cyl.id: cyl for cyl in cylinders}
+    for cyl in cylinders:
+        print("Cylinder ID:", cyl.id)
+        print("ID:", cyl.id, "direction:", cyl.direction)
+        origin = cyl.origin
+        direction = cyl.direction
+        length = cyl.length
+        branch_id = cyl.id
+        print("datos-cilindro:",origin,direction,length,branch_id)
+        poly = cylinder_to_polydata(origin, direction, length, branch_id)
+
+        writer = vtk.vtkXMLPolyDataWriter()
+        writer.SetFileName(f"cylinder_{branch_id}.vtp")
+        writer.SetInputData(poly)
+        writer.Write()
+
+    print("Cilindres exportats.")
+
+    print("Llegint STL...")
+    polydata, vertices, faces = read_stl(STL)
+
+   # projection_vectors = compute_projection_vectors(vertices, branches)
+   # write_projection_vectors("original_projection_vectors.vtp", polydata, projection_vectors)
+    
+    # 2. Construir vecinos de caras
+    face_neighbors = build_face_neighbors(faces)
+
+    # 3. Proyección sobre ramas
+    projection_vectors, mapped_points,xis_list, branch_ids_list = compute_projection_vectors(
+        vertices,
+        branches,
+        cylinders_by_id
+    )
+    print("Antes:", np.unique(branch_ids_list))
+    # 4. Limpieza por elementos (flood-fill)
+    branch_ids_list = assign_branch_by_faces(
+        faces,
+        vertices,
+        branch_ids_list,
+        face_neighbors,
+        branches[0]["id"],
+        branches,
+        distances
+    )
+    print("Después:", np.unique(branch_ids_list))
+    print("Vecinos de la cara 0:", face_neighbors[0])
+    print("Vecinos de la cara 100:", face_neighbors[100])
+    print("Máximo número de vecinos:", max(len(n) for n in face_neighbors))
+    export_original_with_xi(
+        vertices,
+        xis_list,
+        branch_ids_list,
+        filename="original_clean_branch.vtp"
+    )
+
+    # 5. DEBUGG: exportar branch_id por cara
+    face_branch_id = []
+    for face in faces:
+        bids = [branch_ids_list[v] for v in face]
+        # mayoría por cara
+        bid = max(set(bids), key=bids.count)
+        face_branch_id.append(bid)
+
+    export_face_branch_id(faces, face_branch_id, vertices,
+                      "debug_face_branch_id.vtp")
+
+    # 6. Exportar STL original con branch_id limpio
+    export_original_with_xi(
+        vertices,
+        xis_list,
+        branch_ids_list,
+        filename="original_with_xi.vtp"
+    )   
+    # 7. Exportar mapping template
+    export_mapping_template_vtp(
+        mapped_points,
+        projection_vectors=projection_vectors,
+        xis=xis_list,
+        branch_ids=branch_ids_list,
+        filename="mapping_template.vtp"
+    )
+
+    print("Projectant punts...")
+    new_vertices, distances, xis_centerline, xi_cilindro, branch_ids, projection_vectors = map_mesh_vertices(
+        vertices,
+        branches,
+        cylinders,
+        faces
+    )
+
+    def write_point_cloud_vtk(filename, points):
+        with open(filename, "w") as f:
+            f.write("# vtk DataFile Version 3.0\n")
+            f.write("Point cloud\n")
+            f.write("ASCII\n")
+            f.write("DATASET POLYDATA\n")
+            f.write(f"POINTS {len(points)} float\n")
+            for p in points:
+                f.write(f"{p[0]} {p[1]} {p[2]}\n")
+            f.write("VERTICES 0 0\n")
+    write_point_cloud_vtk("cilindro_proyectado_nube.vtk", new_vertices)
+    
+    #cara_id = 12054
+    #v0, v1, v2 =  5580, 5907, 5943
+
+    #print("\n=== Cara", cara_id, "===")
+    #print("Vértices:", v0, v1, v2)
+
+# --- Información de ramas ---
+    #print("\n--- Branch IDs ---")
+    #print("branch_ids[v0] =", branch_ids[v0])
+    #print("branch_ids[v1] =", branch_ids[v1])
+    #print("branch_ids[v2] =", branch_ids[v2])
+
+# --- Información de xi ---
+    #print("\n--- Xi ---")
+    #print("xis[v0] =", xis_centerline[v0],xi_cilindro[v0])
+    #print("xis[v1] =", xis_centerline[v1],xi_cilindro[v1])
+    #print("xis[v2] =", xis_centerline[v1],xi_cilindro[v2])
+
+# --- Información de distancia ---
+    #print("\n--- Distancias ---")
+    #print("distances[v0] =", distances[v0])
+    #print("distances[v1] =", distances[v1])
+    #print("distances[v2] =", distances[v2])
+
+# --- Información de proyección ---
+    #print("\n--- Vectores de proyección ---")
+    #print("projection_vectors[v0] =", projection_vectors[v0])
+    #print("projection_vectors[v1] =", projection_vectors[v1])
+    #print("projection_vectors[v2] =", projection_vectors[v2])
+
+# --- Información geométrica original ---
+    #print("\n--- Coordenadas originales ---")
+    #print("vertices[v0] =", vertices[v0])
+    #print("vertices[v1] =", vertices[v1])
+    #print("vertices[v2] =", vertices[v2])
+
+# --- Coordenadas transformadas ---
+    #print("\n--- Coordenadas transformadas ---")
+    #print("new_vertices[v0] =", new_vertices[v0])
+    #print("new_vertices[v1] =", new_vertices[v1])
+    #print("new_vertices[v2] =", new_vertices[v2])
+
+# --- Comprobación de mezcla de ramas ---
+    #ramas = {branch_ids[v0], branch_ids[v1], branch_ids[v2]}
+    #print("\n--- Mezcla de ramas ---")
+    #print("Ramas presentes en la cara:", ramas)
+    #if len(ramas) > 1:
+    #   print(">>> Esta cara mezcla ramas. Aquí está el origen de la distorsión.")
+    #else:
+    #   print(">>> Esta cara NO mezcla ramas.")
+    # --- Branch IDs ---
+    #print("\n--- Branch IDs ---")
+    #print("branch_ids[v0] =", branch_ids[v0])
+    #print("branch_ids[v1] =", branch_ids[v1])
+    #print("branch_ids[v2] =", branch_ids[v2])
+
+# Crear diccionario ID → índice
+    #branch_id_to_index = { b["id"]: i for i, b in enumerate(branches) }
+
+# Obtener índice real
+    #idx = branch_id_to_index[branch_ids[v0]]
+    #cyl = cylinders[idx]
+
+    #print("\n--- Cilindro asociado ---")
+    #print("origin:", cyl.origin)
+    #print("direction:", cyl.direction)
+    #print("length:", cyl.length)
+
+    #print("\n--- Vector de proyección ---")
+    #print("v0:", projection_vectors[v0])
+    #print("v1:", projection_vectors[v1])
+    #print("v2:", projection_vectors[v2])
+
+    #xi0 = xi_cilindro[v0]
+    #xi1 = xi_cilindro[v1]
+    #xi2 = xi_cilindro[v2]
+
+    #print("Detectando vértices en bifurcación...")
+    #bif_vertices = detect_bifurcation_vertices(
+    #    vertices,
+    #    branches,
+    #    cylinders,
+    #    branch_ids,
+    #    xis,
+    #    faces
+    #)
+    
+    #is_bifurcation = np.zeros(len(vertices), dtype=np.float32)
+    #is_bifurcation[bif_vertices] = 1.0
+    #print("Vértices detectados:", bif_vertices)
+   
+   # print("Stats xi:")
+   # print("  min:", np.nanmin(xis))
+   # print("  max:", np.nanmax(xis))
+
+   # print("Stats distances:")
+   # print("  min:", np.nanmin(distances))
+   # print("  max:", np.nanmax(distances))
+
+   # print("Stats branch_ids:")
+   # print("  unique:", np.unique(branch_ids))
+    
+   # write_vtp(
+   #     "bifurcation_vertices.vtp",
+   #     polydata,
+   #     new_vertices,
+   #     distances,
+   #     xis,
+   #     branch_ids,
+   #     projection_vectors,
+   #     extra_point_data={
+   #     "is_bifurcation": is_bifurcation
+   #     }
+   # )
+
+    #dist_original_vs_mapped = np.linalg.norm(vertices - new_vertices, axis=1)
+
+#    print("Distancia original vs mapeada:")
+#    print("  Mínima :", np.nanmin(dist_original_vs_mapped))
+#    print("  Máxima :", np.nanmax(dist_original_vs_mapped))
+#    print("  Media  :", np.nanmean(dist_original_vs_mapped))
+#    print("  P90    :", np.nanpercentile(dist_original_vs_mapped, 90))
+#    print("  P99    :", np.nanpercentile(dist_original_vs_mapped, 99))
+
+    #idx_max = np.argmax(dist_original_vs_mapped)
+#    print("Indice del vértice con distancia máxima:", idx_max)
+#    print("Distancia máxima:", dist_original_vs_mapped[idx_max])
+#    print("Branch ID:", branch_ids[idx_max])
+#    print("xi:", xis[idx_max])
+#    print("distancia al centerline:", distances[idx_max])
+
+    #caras_con_ese_vertice = np.where(faces == idx_max)[0]
+
+    #is_problematic_vertex = np.zeros(len(vertices), dtype=np.float32)
+    #is_problematic_vertex[idx_max] = 1.0
+
+    #is_problematic_face = np.zeros(len(faces), dtype=np.float32)
+
+    #print("Caras que contienen ese vértice:", caras_con_ese_vertice)
+    #print("\n--- Comprobación completa de todas las caras ---")
+    #for cara in caras_con_ese_vertice:
+    #    v0, v1, v2 = faces[cara]
+    #    is_problematic_face[cara] = 1.0
+
+    #    print(f"\nCara {cara}:")
+    #    print("  ORIGINAL:")
+    #    print("    v0:", vertices[v0])
+    #    print("    v1:", vertices[v1])
+    #    print("    v2:", vertices[v2])
+    #    print("  MAPEADA:")
+    #    print("    v0:", new_vertices[v0])
+    #    print("    v1:", new_vertices[v1])
+    #    print("    v2:", new_vertices[v2])
+
+   # write_vtp(
+   #     "mapped_geometry.vtp",
+   #     polydata,
+   #     new_vertices,
+   #     distances,
+   #     xis,
+   #     branch_ids,
+   #     projection_vectors
+   # )
+
+    caras_mezcladas = []
+
+    #for idx, cara in enumerate(faces):
+    #    v0, v1, v2 = cara
+    #    ramas = {branch_ids[v0], branch_ids[v1], branch_ids[v2]}
+    #    if len(ramas) > 1:
+            #caras_mezcladas.append((idx, ramas))
+            #print("la cara mezcalda",cara, xis[v0], xis[v1], xis[v2])
+    #        for v in (v0, v1, v2):
+    #            if branch_ids[v] != branches[0]["id"] and xi_cilindro[v] > 0.75:
+                    # Reasignar a la raíz
+    #                branch_ids[v] = branches[0]["id"]
+    #                xi_cilindro[v] = 1.0
+    #                new_vertices[v] = map_point_to_cylinder(
+    #                    branches[0],
+    #                    1.0,
+    #                    projection_vectors[v],
+    #                    branches,
+    #                    cylinders
+    #                )
+
+    for idx, cara in enumerate(faces):
+        v0, v1, v2 = cara
+        ramas = {branch_ids[v0], branch_ids[v1], branch_ids[v2]}
+        if len(ramas) > 1:
+            caras_mezcladas.append((idx, ramas))
+            print("la cara mezcalda",cara)
+            print("  xi_centerline:", xis_centerline[v0],
+                                      xis_centerline[v1],
+                                      xis_centerline[v2])
+            print("  xi_cilindro:  ", xi_cilindro[v0],
+                                      xi_cilindro[v1],
+                                      xi_cilindro[v2])
+
+    print("Caras que mezclan ramas:", len(caras_mezcladas))
+    print("Acabat.")
+    print("Escrivint VTP...")
+    exportar_caras_mezcladas_vtp(
+        new_vertices,
+        faces,
+        xis_centerline,
+        xi_cilindro,
+        caras_mezcladas,
+        filename="caras_mezcladas.vtp"
+    )
+    write_vtp(
+        "mapped_geometry.vtp",
+        polydata,
+        new_vertices,
+        distances,
+        xi_cilindro,
+        branch_ids,
+        projection_vectors
+    )
+
+
+
+
+if __name__ == "__main__":
+    main()

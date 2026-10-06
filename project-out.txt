@@ -1,0 +1,27 @@
+Llegint centerline...
+
+=== BIFURCACIÓN REAL ===
+bif = [-10.753   32.3672   6.7749]
+Branques utilitzades: [89, 52, 60]
+Branch 89:
+  start = [ 10.7283    6.25859 105.495  ]
+  end   = [-10.753   32.3672   6.7749]
+Branch 52:
+  start = [-10.753   32.3672   6.7749]
+  end   = [ 32.4214  38.249  -22.5562]
+Branch 60:
+  start = [-10.753   32.3672   6.7749]
+  end   = [-34.4441   34.115    -5.96645]
+Construint cilindres...
+Cylinder ID: 89
+ID: 89 direction: [-0.20585968  0.25020412 -0.9460549 ]
+datos-cilindro: [ 10.7283    6.25859 105.495  ] [-0.20585968  0.25020412 -0.9460549 ] 10.0 89
+Cylinder ID: 52
+ID: 52 direction: [ 0.8071344  0.2034912 -0.554189 ]
+datos-cilindro: [ 8.6697035  8.760632  96.034454 ] [ 0.8071344  0.2034912 -0.554189 ] 10.0 52
+Cylinder ID: 60
+ID: 60 direction: [-0.9237711   0.05021708 -0.3796383 ]
+datos-cilindro: [ 8.6697035  8.760632  96.034454 ] [-0.9237711   0.05021708 -0.3796383 ] 10.0 60
+Cilindres exportats.
+Llegint STL...
+Num caras: 14728
